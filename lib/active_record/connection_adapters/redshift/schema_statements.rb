@@ -5,7 +5,7 @@ module ActiveRecord
         private
 
         def visit_ColumnDefinition(o)
-          o.sql_type = type_to_sql(o.type, o.limit, o.precision, o.scale)
+          o.sql_type = type_to_sql(o.type, limit: o.limit, precision: o.precision, scale: o.scale)
           super
         end
 
@@ -331,8 +331,9 @@ module ActiveRecord
         end
 
         def foreign_keys(table_name)
+          scope = quoted_scope(table_name)
           fk_info = select_all(<<-SQL.strip_heredoc, 'SCHEMA')
-            SELECT t2.relname AS to_table, a1.attname AS column, a2.attname AS primary_key, c.conname AS name, c.confupdtype AS on_update, c.confdeltype AS on_delete
+            SELECT t2.oid::regclass AS to_table, a1.attname AS column, a2.attname AS primary_key, c.conname AS name, c.confupdtype AS on_update, c.confdeltype AS on_delete
             FROM pg_constraint c
             JOIN pg_class t1 ON c.conrelid = t1.oid
             JOIN pg_class t2 ON c.confrelid = t2.oid
@@ -340,8 +341,8 @@ module ActiveRecord
             JOIN pg_attribute a2 ON a2.attnum = c.confkey[1] AND a2.attrelid = t2.oid
             JOIN pg_namespace t3 ON c.connamespace = t3.oid
             WHERE c.contype = 'f'
-              AND t1.relname = #{quote(table_name)}
-              AND t3.nspname = ANY (current_schemas(false))
+              AND t1.relname = #{scope[:name]}
+              AND t3.nspname = #{scope[:schema]}
             ORDER BY c.conname
           SQL
 
@@ -372,7 +373,7 @@ module ActiveRecord
         end
 
         # Maps logical Rails types to PostgreSQL-specific data types.
-        def type_to_sql(type, limit = nil, precision = nil, scale = nil)
+        def type_to_sql(type, limit: nil, precision: nil, scale: nil, **)
           case type.to_s
           when 'integer'
             return 'integer' unless limit
@@ -412,6 +413,28 @@ module ActiveRecord
             scale: cast_type.scale,
           )
           TypeMetadata.new(simple_type, oid: oid, fmod: fmod)
+        end
+
+        private
+        def quoted_scope(name = nil, type: nil)
+          schema, name = extract_schema_qualified_name(name)
+          type = \
+            case type
+            when "BASE TABLE"
+              "'r'"
+            when "VIEW"
+              "'v','m'"
+            end
+          scope = {}
+          scope[:schema] = schema ? quote(schema) : "ANY (current_schemas(false))"
+          scope[:name] = quote(name) if name
+          scope[:type] = type if type
+          scope
+        end
+
+        def extract_schema_qualified_name(string)
+          name = Utils.extract_schema_qualified_name(string.to_s)
+          [name.schema, name.identifier]
         end
       end
     end
