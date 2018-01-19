@@ -615,16 +615,56 @@ module ActiveRecord
         # Query implementation notes:
         #  - format_type includes the column size constraint, e.g. varchar(50)
         #  - ::regclass is a function that gives the id for a table name
+
+        # Edited to include attisdistkey and attsortkeyord
+        # https://github.com/awslabs/amazon-redshift-utils/blob/master/src/AdminViews/v_generate_tbl_ddl.sql
         def column_definitions(table_name) # :nodoc:
           query(<<-end_sql, 'SCHEMA')
               SELECT a.attname, format_type(a.atttypid, a.atttypmod),
-                     pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod
-                FROM pg_attribute a LEFT JOIN pg_attrdef d
-                  ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+                     pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
+                     CASE WHEN pk.conrelid IS NULL THEN false ELSE true END AS is_primary_key,
+                     attisdistkey, attsortkeyord, 
+                     CASE WHEN format_encoding((a.attencodingtype)::integer) = 'none'
+                     THEN NULL
+                     ELSE format_encoding((a.attencodingtype)::integer)
+                     END AS col_encoding
+                     
+              FROM pg_attribute a 
+                LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+                LEFT JOIN pg_constraint pk ON pk.contype = 'p' AND a.attrelid = pk.conrelid AND a.attnum = any(pk.conkey)
+               
                WHERE a.attrelid = '#{quote_table_name(table_name)}'::regclass
                  AND a.attnum > 0 AND NOT a.attisdropped
+               
                ORDER BY a.attnum
           end_sql
+
+          # Alternative solution
+          # query(<<-end_sql, 'SCHEMA')
+          #     SELECT a.attname, format_type(a.atttypid, a.atttypmod),
+          #            pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
+          #            pk.indisprimary as is_primary_key,
+          #            attisdistkey, attsortkeyord, 
+          #            CASE WHEN format_encoding((a.attencodingtype)::integer) = 'none'
+          #            THEN NULL
+          #            ELSE format_encoding((a.attencodingtype)::integer)
+          #            END AS col_encoding
+                     
+          #     FROM pg_attribute a 
+          #       LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+          #       LEFT JOIN (
+          #         SELECT pg_index.indisprimary, 
+          #           pg_index.indrelid,
+          #           string_to_array(textin(int2vectorout(pg_index.indkey)), ' ') AS indkey
+          #         FROM pg_index
+          #         WHERE pg_index.indisprimary
+          #       ) pk ON a.attrelid = pk.indrelid AND a.attnum = ANY(pk.indkey)
+               
+          #      WHERE a.attrelid = '#{quote_table_name(table_name)}'::regclass
+          #        AND a.attnum > 0 AND NOT a.attisdropped
+               
+          #      ORDER BY a.attnum
+          # end_sql
         end
 
         def extract_table_ref_from_insert_sql(sql) # :nodoc:
