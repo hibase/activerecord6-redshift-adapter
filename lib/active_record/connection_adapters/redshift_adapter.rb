@@ -623,6 +623,8 @@ module ActiveRecord
               SELECT a.attname, format_type(a.atttypid, a.atttypmod),
                      pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
                      CASE WHEN pk.conrelid IS NULL THEN false ELSE true END AS is_primary_key,
+                     a.attnum AS column_index,
+                     CASE WHEN pk.conrelid IS NULL THEN NULL ELSE pk.conkey END AS primary_key_order,
                      attisdistkey, attsortkeyord, 
                      CASE WHEN format_encoding((a.attencodingtype)::integer) = 'none'
                      THEN NULL

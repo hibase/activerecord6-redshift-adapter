@@ -150,16 +150,16 @@ module ActiveRecord
 
         # Returns the list of all column definitions for a table.
         def columns(table_name)
-          column_definitions(table_name.to_s).map do |column_name, type, default, notnull, oid, fmod, is_primary_key, is_dist_key, sort_key_order, col_encoding|
+          column_definitions(table_name.to_s).map do |column_name, type, default, notnull, oid, fmod, is_primary_key, column_index, primary_key_order, is_dist_key, sort_key_order, col_encoding|
             default_value = extract_value_from_default(default)
             type_metadata = fetch_type_metadata(column_name, type, oid, fmod)
             default_function = extract_default_function(default_value, default)
-            new_column(column_name, default_value, type_metadata, notnull == 'f', table_name, default_function, is_primary_key, is_dist_key, sort_key_order, col_encoding)
+            new_column(column_name, default_value, type_metadata, notnull == 'f', table_name, default_function, is_primary_key, column_index, primary_key_order, is_dist_key, sort_key_order, col_encoding)
           end
         end
 
-        def new_column(name, default, sql_type_metadata = nil, null = true, table_name = nil, default_function = nil, is_primary_key = false, is_dist_key = false, sort_key_order = 0, col_encoding = nil) # :nodoc:
-          RedshiftColumn.new(name, default, sql_type_metadata, null, table_name, default_function, is_primary_key, is_dist_key, sort_key_order, col_encoding)
+        def new_column(name, default, sql_type_metadata = nil, null = true, table_name = nil, default_function = nil, is_primary_key = false, column_index = nil, primary_key_order = nil, is_dist_key = false, sort_key_order = 0, col_encoding = nil) # :nodoc:
+          RedshiftColumn.new(name, default, sql_type_metadata, null, table_name, default_function, is_primary_key, column_index, primary_key_order, is_dist_key, sort_key_order, col_encoding)
         end
 
         # Returns the current database name.
@@ -277,11 +277,11 @@ module ActiveRecord
         def change_column(table_name, column_name, type, options = {})
           clear_cache!
           quoted_table_name = quote_table_name(table_name)
-          sql_type = type_to_sql(type, options[:limit], options[:precision], options[:scale])
+          sql_type = type_to_sql(type, limit: options[:limit], precision: options[:precision], scale: options[:scale])
           sql = "ALTER TABLE #{quoted_table_name} ALTER COLUMN #{quote_column_name(column_name)} TYPE #{sql_type}"
           sql << " USING #{options[:using]}" if options[:using]
           if options[:cast_as]
-            sql << " USING CAST(#{quote_column_name(column_name)} AS #{type_to_sql(options[:cast_as], options[:limit], options[:precision], options[:scale])})"
+            sql << " USING CAST(#{quote_column_name(column_name)} AS #{type_to_sql(options[:cast_as], limit: options[:limit], precision: options[:precision], scale: options[:scale])})"
           end
           execute sql
 
