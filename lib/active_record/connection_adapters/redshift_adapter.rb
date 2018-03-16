@@ -235,7 +235,7 @@ module ActiveRecord
         unless @connection.transaction_status == ::PG::PQTRANS_IDLE
           @connection.query 'ROLLBACK'
         end
-        @connection.query 'DISCARD ALL'
+        # @connection.query 'DISCARD ALL'
         configure_connection
       end
 
@@ -625,19 +625,19 @@ module ActiveRecord
                      CASE WHEN pk.conrelid IS NULL THEN false ELSE true END AS is_primary_key,
                      a.attnum AS column_index,
                      CASE WHEN pk.conrelid IS NULL THEN NULL ELSE pk.conkey END AS primary_key_order,
-                     attisdistkey, attsortkeyord, 
+                     attisdistkey, attsortkeyord,
                      CASE WHEN format_encoding((a.attencodingtype)::integer) = 'none'
                      THEN NULL
                      ELSE format_encoding((a.attencodingtype)::integer)
                      END AS col_encoding
-                     
-              FROM pg_attribute a 
+
+              FROM pg_attribute a
                 LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
                 LEFT JOIN pg_constraint pk ON pk.contype = 'p' AND a.attrelid = pk.conrelid AND a.attnum = any(pk.conkey)
-               
+
                WHERE a.attrelid = '#{quote_table_name(table_name)}'::regclass
                  AND a.attnum > 0 AND NOT a.attisdropped
-               
+
                ORDER BY a.attnum
           end_sql
 
@@ -646,25 +646,25 @@ module ActiveRecord
           #     SELECT a.attname, format_type(a.atttypid, a.atttypmod),
           #            pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
           #            pk.indisprimary as is_primary_key,
-          #            attisdistkey, attsortkeyord, 
+          #            attisdistkey, attsortkeyord,
           #            CASE WHEN format_encoding((a.attencodingtype)::integer) = 'none'
           #            THEN NULL
           #            ELSE format_encoding((a.attencodingtype)::integer)
           #            END AS col_encoding
-                     
-          #     FROM pg_attribute a 
+
+          #     FROM pg_attribute a
           #       LEFT JOIN pg_attrdef d ON a.attrelid = d.adrelid AND a.attnum = d.adnum
           #       LEFT JOIN (
-          #         SELECT pg_index.indisprimary, 
+          #         SELECT pg_index.indisprimary,
           #           pg_index.indrelid,
           #           string_to_array(textin(int2vectorout(pg_index.indkey)), ' ') AS indkey
           #         FROM pg_index
           #         WHERE pg_index.indisprimary
           #       ) pk ON a.attrelid = pk.indrelid AND a.attnum = ANY(pk.indkey)
-               
+
           #      WHERE a.attrelid = '#{quote_table_name(table_name)}'::regclass
           #        AND a.attnum > 0 AND NOT a.attisdropped
-               
+
           #      ORDER BY a.attnum
           # end_sql
         end
