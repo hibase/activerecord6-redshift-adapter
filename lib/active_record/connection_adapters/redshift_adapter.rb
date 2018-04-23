@@ -236,6 +236,10 @@ module ActiveRecord
           @connection.query 'ROLLBACK'
         end
         # @connection.query 'DISCARD ALL'
+        session_auth = 'DEFAULT'
+        @connection.query 'RESET ALL'
+        @statements.clear if @statements
+
         configure_connection
       end
 
