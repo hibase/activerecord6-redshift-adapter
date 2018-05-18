@@ -45,7 +45,7 @@ module ActiveRecord
         end
 
         def select_value(arel, name = nil, binds = [])
-          arel, binds = binds_from_relation arel, binds
+          arel, binds = arel_from_relation arel
           sql = to_sql(arel, binds)
           execute_and_clear(sql, name, binds) do |result|
             result.getvalue(0, 0) if result.ntuples > 0 && result.nfields > 0
@@ -53,7 +53,7 @@ module ActiveRecord
         end
 
         def select_values(arel, name = nil)
-          arel, binds = binds_from_relation arel, []
+          arel, binds = arel_from_relation arel
           sql = to_sql(arel, binds)
           execute_and_clear(sql, name, binds) do |result|
             if result.nfields > 0

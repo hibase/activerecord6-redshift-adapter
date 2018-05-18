@@ -83,11 +83,11 @@ module ActiveRecord
          # If the schema is not specified as part of +name+ then it will only find tables within
          # the current schema search path (regardless of permissions to access tables in other schemas)
          def table_exists?(name)
-          ActiveSupport::Deprecation.warn(<<-MSG.squish)
-            #table_exists? currently checks both tables and views.
-            This behavior is deprecated and will be changed with Rails 5.1 to only check tables.
-            Use #data_source_exists? instead.
-          MSG
+          # ActiveSupport::Deprecation.warn(<<-MSG.squish)
+          #   #table_exists? currently checks both tables and views.
+          #   This behavior is deprecated and will be changed with Rails 5.1 to only check tables.
+          #   Use #data_source_exists? instead.
+          # MSG
 
           data_source_exists?(name)
         end
@@ -374,19 +374,20 @@ module ActiveRecord
 
         # Maps logical Rails types to PostgreSQL-specific data types.
         def type_to_sql(type, limit: nil, precision: nil, scale: nil, **)
-          case type.to_s
-          when 'integer'
-            return 'integer' unless limit
+          return super
+          # case type.to_s
+          # when 'integer'
+          #   return 'integer' unless limit
 
-            case limit
-              when 1, 2; 'smallint'
-              when nil, 3, 4; 'integer'
-              when 5..8; 'bigint'
-              else raise(ActiveRecordError, "No integer type has byte size #{limit}. Use a numeric with precision 0 instead.")
-            end
-          else
-            super(type)
-          end
+          #   case limit
+          #     when 1, 2; 'smallint'
+          #     when nil, 3, 4; 'integer'
+          #     when 5..8; 'bigint'
+          #     else raise(ActiveRecordError, "No integer type has byte size #{limit}. Use a numeric with precision 0 instead.")
+          #   end
+          # else
+          #   super(type)
+          # end
         end
 
         # PostgreSQL requires the ORDER BY columns in the select list for distinct queries, and
