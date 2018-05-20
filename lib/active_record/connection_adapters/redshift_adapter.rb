@@ -76,7 +76,7 @@ module ActiveRecord
       NATIVE_DATABASE_TYPES = {
         primary_key: "integer identity primary key",
         string:      { name: "varchar" },
-        text:        { name: "varchar(65535)" },
+        text:        { name: "varchar", limit: 65535 },
         integer:     { name: "integer" },
         float:       { name: "float" },
         decimal:     { name: "decimal" },

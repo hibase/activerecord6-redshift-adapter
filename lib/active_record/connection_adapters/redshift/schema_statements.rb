@@ -139,13 +139,75 @@ module ActiveRecord
           select_value("SELECT COUNT(*) FROM pg_namespace WHERE nspname = '#{name}'", 'SCHEMA').to_i > 0
         end
 
-        def index_name_exists?(table_name, index_name, default)
-          false
+        def index_name_exists?(table_name, index_name)
+          super
         end
 
         # Returns an array of indexes for the given table.
-        def indexes(table_name, name = nil)
-          []
+        def indexes(table_name)
+          scope = quoted_scope(table_name)
+
+          result = query(<<-SQL, "SCHEMA")
+            SELECT i.relname, d.indisunique, d.indkey, pg_get_indexdef(d.indexrelid), t.oid,
+                            pg_catalog.obj_description(i.oid, 'pg_class') AS comment
+            FROM pg_class t
+            INNER JOIN pg_index d ON t.oid = d.indrelid
+            INNER JOIN pg_class i ON d.indexrelid = i.oid
+            LEFT JOIN pg_namespace n ON n.oid = i.relnamespace
+            WHERE i.relkind = 'i'
+              AND d.indisprimary = 'f'
+              AND t.relname = #{scope[:name]}
+              AND n.nspname = #{scope[:schema]}
+            ORDER BY t.relname
+          SQL
+
+          result.map do |row|
+            index_name = row[0]
+            unique = row[1]
+            indkey = row[2].split(" ").map(&:to_i)
+            inddef = row[3]
+            oid = row[4]
+            comment = row[5]
+
+            using, expressions, where = inddef.scan(/ USING (\w+?) \((.+?)\)(?: WHERE (.+))?\z/m).flatten
+
+            orders = {}
+            opclasses = {}
+
+            if indkey.include?(0)
+              columns = expressions
+            else
+              columns = Hash[query(<<-SQL.strip_heredoc, "SCHEMA")].values_at(*indkey).compact
+                SELECT a.attnum, a.attname
+                FROM pg_attribute a
+                WHERE a.attrelid = #{oid}
+                AND a.attnum IN (#{indkey.join(",")})
+              SQL
+
+              # add info on sort order (only desc order is explicitly specified, asc is the default)
+              # and non-default opclasses
+              expressions.scan(/(?<column>\w+)\s?(?<opclass>\w+_ops)?\s?(?<desc>DESC)?\s?(?<nulls>NULLS (?:FIRST|LAST))?/).each do |column, opclass, desc, nulls|
+                opclasses[column] = opclass.to_sym if opclass
+                if nulls
+                  orders[column] = [desc, nulls].compact.join(" ")
+                else
+                  orders[column] = :desc if desc
+                end
+              end
+            end
+
+            IndexDefinition.new(
+              table_name,
+              index_name,
+              unique,
+              columns,
+              orders: orders,
+              opclasses: opclasses,
+              where: where,
+              using: using.to_sym,
+              comment: comment.presence
+            )
+          end
         end
 
         # Returns the list of all column definitions for a table.
@@ -245,16 +307,15 @@ module ActiveRecord
         end
 
         # Returns just a table's primary key
-        def primary_keys(table)
-          pks = query(<<-end_sql, 'SCHEMA')
+        def primary_keys(table_name)
+          query_values(<<-SQL, 'SCHEMA')
             SELECT DISTINCT attr.attname
             FROM pg_attribute attr
             INNER JOIN pg_depend dep ON attr.attrelid = dep.refobjid AND attr.attnum = dep.refobjsubid
             INNER JOIN pg_constraint cons ON attr.attrelid = cons.conrelid AND attr.attnum = any(cons.conkey)
             WHERE cons.contype = 'p'
-              AND dep.refobjid = '#{quote_table_name(table)}'::regclass
-          end_sql
-          pks.present? ? pks[0] : pks
+              AND dep.refobjid = '#{quote_table_name(table_name)}'::regclass
+          SQL
         end
 
         # Renames a table.
@@ -273,20 +334,24 @@ module ActiveRecord
           super
         end
 
+        class ChangeColumnNotSupported < StandardError; end
+
         # Changes the column of a table.
         def change_column(table_name, column_name, type, options = {})
-          clear_cache!
-          quoted_table_name = quote_table_name(table_name)
-          sql_type = type_to_sql(type, limit: options[:limit], precision: options[:precision], scale: options[:scale])
-          sql = "ALTER TABLE #{quoted_table_name} ALTER COLUMN #{quote_column_name(column_name)} TYPE #{sql_type}"
-          sql << " USING #{options[:using]}" if options[:using]
-          if options[:cast_as]
-            sql << " USING CAST(#{quote_column_name(column_name)} AS #{type_to_sql(options[:cast_as], limit: options[:limit], precision: options[:precision], scale: options[:scale])})"
-          end
-          execute sql
+          raise ChangeColumnNotSupported
 
-          change_column_default(table_name, column_name, options[:default]) if options_include_default?(options)
-          change_column_null(table_name, column_name, options[:null], options[:default]) if options.key?(:null)
+          # clear_cache!
+          # quoted_table_name = quote_table_name(table_name)
+          # sql_type = type_to_sql(type, limit: options[:limit], precision: options[:precision], scale: options[:scale])
+          # sql = "ALTER TABLE #{quoted_table_name} ALTER COLUMN #{quote_column_name(column_name)} TYPE #{sql_type}"
+          # sql << " USING #{options[:using]}" if options[:using]
+          # if options[:cast_as]
+          #   sql << " USING CAST(#{quote_column_name(column_name)} AS #{type_to_sql(options[:cast_as], limit: options[:limit], precision: options[:precision], scale: options[:scale])})"
+          # end
+          # execute sql
+
+          # change_column_default(table_name, column_name, options[:default]) if options_include_default?(options)
+          # change_column_null(table_name, column_name, options[:null], options[:default]) if options.key?(:null)
         end
 
         # Changes the default value of a table column.
@@ -322,6 +387,7 @@ module ActiveRecord
         end
 
         def add_index(table_name, column_name, options = {}) #:nodoc:
+          super
         end
 
         def remove_index!(table_name, index_name) #:nodoc:
