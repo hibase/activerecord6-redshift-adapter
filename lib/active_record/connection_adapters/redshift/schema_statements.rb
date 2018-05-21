@@ -216,7 +216,7 @@ module ActiveRecord
             default_value = extract_value_from_default(default)
             type_metadata = fetch_type_metadata(column_name, type, oid, fmod)
             default_function = extract_default_function(default_value, default)
-            new_column(column_name, default_value, type_metadata, notnull == 'f', table_name, default_function, is_primary_key, column_index, primary_key_order, is_dist_key, sort_key_order, col_encoding)
+            new_column(column_name, default_value, type_metadata, notnull == 'f', table_name, default_function, is_primary_key == 't', column_index, primary_key_order, is_dist_key == 't', sort_key_order, col_encoding)
           end
         end
 
