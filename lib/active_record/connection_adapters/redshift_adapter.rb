@@ -89,6 +89,10 @@ module ActiveRecord
         boolean:     { name: "boolean" },
       }
 
+      MOCK_DATABASE_TYPES = {
+        primary_key: "integer primary key"
+      }
+
       OID = Redshift::OID #:nodoc:
 
       include Redshift::Quoting
@@ -253,7 +257,7 @@ module ActiveRecord
       end
 
       def native_database_types #:nodoc:
-        NATIVE_DATABASE_TYPES
+        NATIVE_DATABASE_TYPES.merge(@config[:mock] ? MOCK_DATABASE_TYPES : {})
       end
 
       # Returns true, since this connection adapter supports migrations.
@@ -625,16 +629,17 @@ module ActiveRecord
         # Edited to include attisdistkey and attsortkeyord
         # https://github.com/awslabs/amazon-redshift-utils/blob/master/src/AdminViews/v_generate_tbl_ddl.sql
         def column_definitions(table_name) # :nodoc:
+
           query(<<-end_sql, 'SCHEMA')
               SELECT a.attname, format_type(a.atttypid, a.atttypmod),
                      pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
                      CASE WHEN pk.conrelid IS NULL THEN false ELSE true END AS is_primary_key,
                      a.attnum AS column_index,
                      CASE WHEN pk.conrelid IS NULL THEN NULL ELSE pk.conkey END AS primary_key_order,
-                     attisdistkey, attsortkeyord,
-                     CASE WHEN format_encoding((a.attencodingtype)::integer) = 'none'
+                     #{@config[:mock] ? 'null, null' : 'attisdistkey, attsortkeyord'},
+                     CASE WHEN #{@config[:mock] ? '\'none\'' : 'format_encoding((a.attencodingtype)::integer)'} = 'none'
                      THEN NULL
-                     ELSE format_encoding((a.attencodingtype)::integer)
+                     ELSE #{@config[:mock] ? 'null' : 'format_encoding((a.attencodingtype)::integer)'}
                      END AS col_encoding
 
               FROM pg_attribute a
