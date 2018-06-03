@@ -1,5 +1,4 @@
 # frozen_string_literal: true
-
 require "tempfile"
 
 module ActiveRecord
@@ -139,9 +138,8 @@ module ActiveRecord
           FileUtils.cp(tempfile.path, filename)
         end
     end
-
-    module DatabaseTasks
-      register_task(/redshift/, "ActiveRecord::Tasks::RedshiftDatabaseTasks")
-    end
   end
 end
+
+ActiveRecord::Tasks.autoload :RedshiftDatabaseTasks, "active_record/tasks/redshift_database_tasks"
+ActiveRecord::Tasks::DatabaseTasks.register_task(/redshift/, "ActiveRecord::Tasks::RedshiftDatabaseTasks")
