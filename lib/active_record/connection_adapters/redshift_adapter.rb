@@ -401,6 +401,7 @@ module ActiveRecord
           m.alias_type 'timestamptz', 'timestamp'
           m.register_type 'date', Type::Date.new
           m.register_type 'time', Type::Time.new
+          m.alias_type 2205, 'varchar'
 
           m.register_type 'timestamp' do |_, _, sql_type|
             precision = extract_precision(sql_type)
