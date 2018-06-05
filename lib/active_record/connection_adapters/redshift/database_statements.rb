@@ -208,11 +208,11 @@ module ActiveRecord
           # Postgres 8.0 does not support
           # multirow inserts
           if @config[:mock]
-            split_fixtures = fixture_set.map{|table_name, fixtures|
+            split_fixtures = fixture_set.flat_map{|table_name, fixtures|
               fixtures.map{|fixture_row|
                 [table_name, [fixture_row]]
               }
-            }.flatten(1)
+            }
 
             super(split_fixtures, tables_to_delete)
           else
