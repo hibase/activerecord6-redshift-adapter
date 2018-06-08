@@ -166,6 +166,19 @@ module ActiveRecord
           super
         end
 
+        def insert(arel, name = nil, pk = nil, id_value = nil, sequence_name = nil, binds = [])
+          if @config[:mock]
+            sql, binds = to_sql_and_binds(arel, binds)
+            insert_statement, _, values_statement = sql.partition(/ values /i)
+            values = values_statement.scan(/[\w+]*\((?>[^)(]+|\g<0>)*\)/)
+            post_values_statement = values_statement.rpartition(values.last)[2]
+            execute combine_multi_statements(values.map{|row| "#{insert_statement} VALUES #{row} #{post_values_statement}"}), name
+            self
+          else
+            super
+          end
+        end
+
         def exec_insert(sql, name = nil, binds = [], pk = nil, sequence_name = nil)
           if use_insert_returning? || pk == false
             super
