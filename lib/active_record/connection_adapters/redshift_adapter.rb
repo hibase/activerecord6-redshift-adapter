@@ -79,7 +79,7 @@ module ActiveRecord
         primary_key: "integer identity primary key",
         string:      { name: "varchar" },
         text:        { name: "varchar", limit: 65535 },
-        integer:     { name: "int4" },
+        integer:     { name: "integer" },
         float:       { name: "float" },
         decimal:     { name: "decimal" },
         datetime:    { name: "timestamp" },
