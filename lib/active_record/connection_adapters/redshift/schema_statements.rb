@@ -439,7 +439,7 @@ module ActiveRecord
         end
 
         # Maps logical Rails types to PostgreSQL-specific data types.
-        def type_to_sql(type, limit: nil, precision: nil, scale: nil, **)
+        def type_to_sql(type, limit: nil, precision: nil, scale: nil, **args)
           case type.to_s
           when 'integer'
             return 'integer' unless limit
@@ -451,7 +451,7 @@ module ActiveRecord
               else raise(ActiveRecordError, "No integer type has byte size #{limit}. Use a numeric with precision 0 instead.")
             end
           else
-            super(type)
+            super(type.to_sym, limit: limit, precision: precision, scale: scale, **args)
           end
         end
 
