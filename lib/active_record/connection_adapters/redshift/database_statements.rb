@@ -171,6 +171,7 @@ module ActiveRecord
             sql, binds = to_sql_and_binds(arel, binds)
             insert_statement, _, values_statement = sql.partition(/ values /i)
             values = values_statement.scan(/[\w+]*\((?>[^)(]+|\g<0>)*\)/)
+            return super if values.blank?
             post_values_statement = values_statement.rpartition(values.last)[2]
             execute combine_multi_statements(values.map{|row| "#{insert_statement} VALUES #{row} #{post_values_statement}"}), name
             self
