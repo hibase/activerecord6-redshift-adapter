@@ -283,6 +283,16 @@ module ActiveRecord
           @schema_search_path ||= select_value('SHOW search_path', 'SCHEMA')
         end
 
+        # Returns the current client message level.
+        def client_min_messages
+          query_value("SHOW client_min_messages", "SCHEMA")
+        end
+
+        # Set the client message level.
+        def client_min_messages=(level)
+          execute("SET client_min_messages TO '#{level}'", "SCHEMA")
+        end
+
         # Returns the sequence name for a table's primary key or some other specified key.
         def default_sequence_name(table_name, pk = nil) #:nodoc:
           result = serial_sequence(table_name, pk || 'id')
@@ -470,7 +480,7 @@ module ActiveRecord
         end
 
         def fetch_type_metadata(column_name, sql_type, oid, fmod)
-          cast_type = get_oid_type(oid.to_i, fmod.to_i, column_name, sql_type)
+          cast_type = get_oid_type(oid, fmod, column_name, sql_type)
           simple_type = SqlTypeMetadata.new(
             sql_type: sql_type,
             type: cast_type.type,
