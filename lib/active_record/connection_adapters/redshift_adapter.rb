@@ -373,7 +373,7 @@ module ActiveRecord
         end
 
       private
-        # See https://www.postgresql.org/docs/current/8.0/errcodes-appendix.html
+        # See https://www.postgresql.org/docs/8.0/static/errcodes-appendix.html
         VALUE_LIMIT_VIOLATION = "22001"
         NUMERIC_VALUE_OUT_OF_RANGE = "22003"
         NOT_NULL_VIOLATION    = "23502"
@@ -573,7 +573,7 @@ module ActiveRecord
           # FEATURE_NOT_SUPPORTED.  Check here for more details:
           # http://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/backend/utils/cache/plancache.c#l573
           begin
-            code = pgerror.result.result_error_field(PGresult::PG_DIAG_SQLSTATE)
+            code = pgerror.result.result_error_field(PG::Result::PG_DIAG_SQLSTATE)
           rescue
             raise e
           end
