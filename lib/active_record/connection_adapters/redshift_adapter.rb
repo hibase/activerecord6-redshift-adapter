@@ -636,24 +636,14 @@ module ActiveRecord
 
           variables = @config.fetch(:variables, {}).stringify_keys
 
-          # If using Active Record's time zone support configure the connection to return
-          # TIMESTAMP WITH ZONE types in UTC.
-          unless variables["timezone"]
-            if ActiveRecord::Base.default_timezone == :utc
-              variables["timezone"] = "UTC"
-            elsif @local_tz
-              variables["timezone"] = @local_tz
-            end
-          end
-
           # SET statements from :variables config hash
           # http://www.postgresql.org/docs/8.3/static/sql-set.html
           variables.map do |k, v|
             if v == ':default' || v == :default
               # Sets the value to the global or compile default
-              execute("SET SESSION #{k} TO DEFAULT", 'SCHEMA')
+              execute("SET #{k} TO DEFAULT", 'SCHEMA')
             elsif !v.nil?
-              execute("SET SESSION #{k} TO #{quote(v)}", 'SCHEMA')
+              execute("SET #{k} TO #{quote(v)}", 'SCHEMA')
             end
           end
         end

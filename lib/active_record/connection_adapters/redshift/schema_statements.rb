@@ -216,7 +216,7 @@ module ActiveRecord
             default_value = extract_value_from_default(default)
             type_metadata = fetch_type_metadata(column_name, type, oid, fmod)
             default_function = extract_default_function(default_value, default)
-            new_column(column_name, default_value, type_metadata, notnull == 'f', table_name, default_function, is_primary_key == 't', column_index, primary_key_order, is_dist_key == 't', sort_key_order, col_encoding)
+            new_column(column_name, default_value, type_metadata, !notnull, table_name, default_function, is_primary_key, column_index, primary_key_order, is_dist_key, sort_key_order, col_encoding)
           end
         end
 
@@ -290,7 +290,11 @@ module ActiveRecord
 
         # Set the client message level.
         def client_min_messages=(level)
-          execute("SET client_min_messages TO '#{level}'", "SCHEMA")
+          begin
+            execute("SET client_min_messages TO '#{level}'", "SCHEMA")
+          rescue ActiveRecord::StatementInvalid => error
+            return false
+          end
         end
 
         # Returns the sequence name for a table's primary key or some other specified key.
