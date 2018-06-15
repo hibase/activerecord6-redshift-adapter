@@ -18,10 +18,31 @@ require 'pg'
 
 require 'ipaddr'
 
+module PG
+  class Connection
+    class << self
+      alias :orig_parse_connect_args :parse_connect_args
+    end
+
+    # We patch the original PG method in order
+    # to delete the fallback_application_name
+    # argument, which is otherwise always added
+    def self::parse_connect_args( *args )
+      parsed_args = orig_parse_connect_args(*args)
+
+      if parsed_args.include? "remove_application_name='true'"
+        parsed_args = parsed_args.gsub("remove_application_name='true'", "").gsub(/fallback_application_name='.*?'/, '').squish
+      end
+
+      parsed_args
+    end
+  end
+end
+
 module ActiveRecord
   module ConnectionHandling # :nodoc:
     RS_VALID_CONN_PARAMS = [:host, :hostaddr, :port, :dbname, :user, :password, :connect_timeout,
-                         :client_encoding, :options, :application_name, :fallback_application_name,
+                         :client_encoding, :options, # :application_name, :fallback_application_name,
                          :keepalives, :keepalives_idle, :keepalives_interval, :keepalives_count,
                          :tty, :sslmode, :requiressl, :sslcompression, :sslcert, :sslkey,
                          :sslrootcert, :sslcrl, :requirepeer, :krbsrvname, :gsslib, :service]
@@ -591,7 +612,7 @@ module ActiveRecord
         # Connects to a PostgreSQL server and sets up the adapter depending on the
         # connected server's characteristics.
         def connect
-          @connection = PG.connect(@connection_parameters)
+          @connection = PG.connect(@connection_parameters.merge(remove_application_name: true))
           configure_connection
         rescue ::PG::Error => error
           if error.message.include?("does not exist")
