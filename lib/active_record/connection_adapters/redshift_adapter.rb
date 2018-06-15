@@ -28,9 +28,7 @@ module ActiveRecord
 
     # Establishes a connection to the database that's used by all Active Record objects
     def redshift_connection(config)
-      conn_params = config.symbolize_keys
-
-      conn_params.delete_if { |_, v| v.nil? }
+      conn_params = config.symbolize_keys.compact
 
       # Map ActiveRecords param names to PGs.
       conn_params[:user] = conn_params.delete(:username) if conn_params[:username]
@@ -203,11 +201,14 @@ module ActiveRecord
         @table_alias_length = nil
 
         connect
+        add_pg_encoders
         @statements = StatementPool.new @connection,
                                         self.class.type_cast_config_to_integer(config[:statement_limit])
 
+        add_pg_decoders
+
         @type_map = Type::HashLookupTypeMap.new
-        initialize_type_map(type_map)
+        initialize_type_map
         @local_tz = execute('SHOW TIME ZONE', 'SCHEMA').first["TimeZone"]
         @use_insert_returning = @config.key?(:insert_returning) ? self.class.type_cast_config_to_boolean(@config[:insert_returning]) : false
       end
@@ -269,14 +270,6 @@ module ActiveRecord
       # Does PostgreSQL support finding primary key on non-Active Record tables?
       def supports_primary_key? #:nodoc:
         true
-      end
-
-      # Enable standard-conforming strings if available.
-      def set_standard_conforming_strings
-        old, self.client_min_messages = client_min_messages, 'panic'
-        execute('SET standard_conforming_strings = on', 'SCHEMA') rescue nil
-      ensure
-        self.client_min_messages = old
       end
 
       def supports_ddl_transactions?
@@ -358,20 +351,44 @@ module ActiveRecord
           @connection.server_version
         end
 
+      private
+        # See https://www.postgresql.org/docs/current/8.0/errcodes-appendix.html
+        VALUE_LIMIT_VIOLATION = "22001"
+        NUMERIC_VALUE_OUT_OF_RANGE = "22003"
+        NOT_NULL_VIOLATION    = "23502"
+        FOREIGN_KEY_VIOLATION = "23503"
+        UNIQUE_VIOLATION      = "23505"
+        SERIALIZATION_FAILURE = "40001"
+        DEADLOCK_DETECTED     = "40P01"
+        LOCK_NOT_AVAILABLE    = "55P03"
+        QUERY_CANCELED        = "57014"
+
         def translate_exception(exception, message)
           return exception unless exception.respond_to?(:result)
 
-          case exception.message
-          when /duplicate key value violates unique constraint/
-            RecordNotUnique.new(message, exception)
-          when /violates foreign key constraint/
-            InvalidForeignKey.new(message, exception)
+          case exception.result.try(:error_field, PG::PG_DIAG_SQLSTATE)
+          when UNIQUE_VIOLATION
+            RecordNotUnique.new(message)
+          when FOREIGN_KEY_VIOLATION
+            InvalidForeignKey.new(message)
+          when VALUE_LIMIT_VIOLATION
+            ValueTooLong.new(message)
+          when NUMERIC_VALUE_OUT_OF_RANGE
+            RangeError.new(message)
+          when NOT_NULL_VIOLATION
+            NotNullViolation.new(message)
+          when SERIALIZATION_FAILURE
+            SerializationFailure.new(message)
+          when DEADLOCK_DETECTED
+            Deadlocked.new(message)
+          when LOCK_NOT_AVAILABLE
+            LockWaitTimeout.new(message)
+          when QUERY_CANCELED
+            QueryCanceled.new(message)
           else
             super
           end
         end
-
-      private
 
         def get_oid_type(oid, fmod, column_name, sql_type = '') # :nodoc:
           if !type_map.key?(oid)
@@ -514,17 +531,18 @@ module ActiveRecord
         end
 
         def exec_no_cache(sql, name, binds)
-          log(sql, name, binds) { @connection.async_exec(sql, []) }
+          type_casted_binds = type_casted_binds(binds)
+          log(sql, name, binds, type_casted_binds) do
+            @connection.async_exec(sql, type_casted_binds)
+          end
         end
 
         def exec_cache(sql, name, binds)
           stmt_key = prepare_statement(sql)
-          type_casted_binds = binds.map { |col, val|
-            [col, type_cast(val, col)]
-          }
+          type_casted_binds = type_casted_binds(binds)
 
-          log(sql, name, type_casted_binds, stmt_key) do
-            @connection.exec_prepared(stmt_key, type_casted_binds.map { |_, val| val })
+          log(sql, name, binds, type_casted_binds, stmt_key) do
+            @connection.exec_prepared(stmt_key, type_casted_binds)
           end
         rescue ActiveRecord::StatementInvalid => e
           pgerror = e.original_exception
@@ -534,7 +552,7 @@ module ActiveRecord
           # FEATURE_NOT_SUPPORTED.  Check here for more details:
           # http://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/backend/utils/cache/plancache.c#l573
           begin
-            code = pgerror.result.result_error_field(PG::Result::PG_DIAG_SQLSTATE)
+            code = pgerror.result.result_error_field(PGresult::PG_DIAG_SQLSTATE)
           rescue
             raise e
           end
@@ -573,8 +591,7 @@ module ActiveRecord
         # Connects to a PostgreSQL server and sets up the adapter depending on the
         # connected server's characteristics.
         def connect
-          @connection = PG::Connection.connect(@connection_parameters)
-
+          @connection = PG.connect(@connection_parameters)
           configure_connection
         rescue ::PG::Error => error
           if error.message.include?("does not exist")
@@ -590,11 +607,26 @@ module ActiveRecord
           if @config[:encoding]
             @connection.set_client_encoding(@config[:encoding])
           end
+          self.client_min_messages = @config[:min_messages] || "warning"
           self.schema_search_path = @config[:schema_search_path] || @config[:schema_order]
+
+          # Use standard-conforming strings so we don't have to do the E'...' dance.
+          # set_standard_conforming_strings
+
+          variables = @config.fetch(:variables, {}).stringify_keys
+
+          # If using Active Record's time zone support configure the connection to return
+          # TIMESTAMP WITH ZONE types in UTC.
+          unless variables["timezone"]
+            if ActiveRecord::Base.default_timezone == :utc
+              variables["timezone"] = "UTC"
+            elsif @local_tz
+              variables["timezone"] = @local_tz
+            end
+          end
 
           # SET statements from :variables config hash
           # http://www.postgresql.org/docs/8.3/static/sql-set.html
-          variables = @config[:variables] || {}
           variables.map do |k, v|
             if v == ':default' || v == :default
               # Sets the value to the global or compile default
@@ -631,7 +663,6 @@ module ActiveRecord
         # Edited to include attisdistkey and attsortkeyord
         # https://github.com/awslabs/amazon-redshift-utils/blob/master/src/AdminViews/v_generate_tbl_ddl.sql
         def column_definitions(table_name) # :nodoc:
-
           query(<<-end_sql, 'SCHEMA')
               SELECT a.attname, format_type(a.atttypid, a.atttypmod),
                      pg_get_expr(d.adbin, d.adrelid), a.attnotnull, a.atttypid, a.atttypmod,
@@ -690,6 +721,51 @@ module ActiveRecord
         def create_table_definition(*args) # :nodoc:
           Redshift::TableDefinition.new(*args)
         end
+
+        def add_pg_encoders
+          map = PG::TypeMapByClass.new
+          map[Integer] = PG::TextEncoder::Integer.new
+          map[TrueClass] = PG::TextEncoder::Boolean.new
+          map[FalseClass] = PG::TextEncoder::Boolean.new
+          @connection.type_map_for_queries = map
+        end
+
+        def add_pg_decoders
+          coders_by_name = {
+            "int2" => PG::TextDecoder::Integer,
+            "int4" => PG::TextDecoder::Integer,
+            "int8" => PG::TextDecoder::Integer,
+            "oid" => PG::TextDecoder::Integer,
+            "float4" => PG::TextDecoder::Float,
+            "float8" => PG::TextDecoder::Float,
+            "bool" => PG::TextDecoder::Boolean,
+          }
+          known_coder_types = coders_by_name.keys.map { |n| quote(n) }
+          query = <<-SQL % known_coder_types.join(", ")
+            SELECT t.oid, t.typname
+            FROM pg_type as t
+            WHERE t.typname IN (%s)
+          SQL
+          coders = execute_and_clear(query, "SCHEMA", []) do |result|
+            result
+              .map { |row| construct_coder(row, coders_by_name[row["typname"]]) }
+              .compact
+          end
+
+          map = PG::TypeMapByOid.new
+          coders.each { |coder| map.add_coder(coder) }
+          @connection.type_map_for_results = map
+        end
+
+        def construct_coder(row, coder_class)
+          return unless coder_class
+          coder_class.new(oid: row["oid"].to_i, name: row["typname"])
+        end
+
+        ActiveRecord::Type.register(:datetime, OID::DateTime, adapter: :redshift)
+        ActiveRecord::Type.register(:decimal, OID::Decimal, adapter: :redshift)
+        ActiveRecord::Type.register(:json, OID::Json, adapter: :redshift)
+        ActiveRecord::Type.register(:jsonb, OID::Jsonb, adapter: :redshift)
     end
   end
 end
