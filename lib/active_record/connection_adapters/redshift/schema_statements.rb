@@ -17,6 +17,18 @@ module ActiveRecord
             super
           end
         end
+
+        def visit_ForeignKeyDefinition(o)
+          sql = <<-SQL.strip_heredoc
+            CONSTRAINT #{quote_column_name(o.name)}
+            FOREIGN KEY (#{quote_column_name(o.column)})
+              REFERENCES #{quote_table_name(o.to_table)} (#{quote_column_name(o.primary_key)})
+              #{o.options[:deferrable] ? "DEFERRABLE" : ""}
+          SQL
+          sql << " #{action_sql('DELETE', o.on_delete)}" if o.on_delete
+          sql << " #{action_sql('UPDATE', o.on_update)}" if o.on_update
+          sql
+        end
       end
 
       module SchemaStatements
@@ -413,6 +425,7 @@ module ActiveRecord
         class OnDeleteNotSupported < StandardError; end
         def add_foreign_key(from_table, to_table, options = {})
           raise OnDeleteNotSupported if options.keys.include? :on_delete
+          options[:deferrable] = true if @config[:mock]
           super
         end
 
