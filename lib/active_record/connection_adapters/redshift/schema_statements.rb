@@ -410,6 +410,12 @@ module ActiveRecord
         def rename_index(table_name, old_name, new_name)
         end
 
+        class OnDeleteNotSupported < StandardError; end
+        def add_foreign_key(from_table, to_table, options = {})
+          raise OnDeleteNotSupported if options.keys.include? :on_delete
+          super
+        end
+
         def foreign_keys(table_name)
           scope = quoted_scope(table_name)
           fk_info = select_all(<<-SQL.strip_heredoc, 'SCHEMA')

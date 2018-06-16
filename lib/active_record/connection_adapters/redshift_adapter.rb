@@ -95,7 +95,8 @@ module ActiveRecord
       ADAPTER_NAME = 'Redshift'.freeze
 
       NATIVE_DATABASE_TYPES = {
-        primary_key: "integer identity primary key",
+        primary_key: "integer primary key",
+        identity:    "integer identity primary key",
         string:      { name: "varchar" },
         text:        { name: "varchar", limit: 65535 },
         integer:     { name: "integer" },
@@ -110,7 +111,7 @@ module ActiveRecord
       }
 
       MOCK_DATABASE_TYPES = {
-        primary_key: "integer primary key"
+        identity: "integer primary key"
       }
 
       OID = Redshift::OID #:nodoc:

@@ -245,7 +245,7 @@ module ActiveRecord
 
             super(split_fixtures, tables_to_delete.reverse)
           else
-            super(split_fixtures, tables_to_delete.reverse)
+            super(fixture_set, tables_to_delete.reverse)
           end
         end
 
