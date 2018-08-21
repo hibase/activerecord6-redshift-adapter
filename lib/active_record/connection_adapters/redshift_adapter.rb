@@ -485,24 +485,29 @@ module ActiveRecord
         end
 
         # Extracts the value from a PostgreSQL column default definition.
-        def extract_value_from_default(default) # :nodoc:
+        def extract_value_from_default(default)
           case default
             # Quoted types
-            when /\A[\(B]?'(.*)'::/m
-              $1.gsub(/''/, "'")
-            # Boolean types
-            when 'true', 'false'
-              default
-            # Numeric types
-            when /\A\(?(-?\d+(\.\d*)?)\)?\z/
-              $1
-            # Object identifier types
-            when /\A-?\d+\z/
-              $1
-            else
-              # Anything else is blank, some user type, or some function
-              # and we can't know the value of that, so return nil.
+          when /\A[\(B]?'(.*)'.*::"?([\w. ]+)"?(?:\[\])?\z/m
+            # The default 'now'::date is CURRENT_DATE
+            if $1 == "now".freeze && $2 == "date".freeze
               nil
+            else
+              $1.gsub("''".freeze, "'".freeze)
+            end
+            # Boolean types
+          when "true".freeze, "false".freeze
+            default
+            # Numeric types
+          when /\A\(?(-?\d+(\.\d*)?)\)?(::bigint)?\z/
+            $1
+            # Object identifier types
+          when /\A-?\d+\z/
+            $1
+          else
+            # Anything else is blank, some user type, or some function
+            # and we can't know the value of that, so return nil.
+            nil
           end
         end
 
@@ -511,7 +516,7 @@ module ActiveRecord
         end
 
         def has_default_function?(default_value, default) # :nodoc:
-          !default_value && (%r{\w+\(.*\)} === default)
+          !default_value && %r{\w+\(.*\)|\(.*\)::\w+|CURRENT_DATE|CURRENT_TIMESTAMP}.match?(default)
         end
 
         def load_additional_types(type_map, oids = nil) # :nodoc:

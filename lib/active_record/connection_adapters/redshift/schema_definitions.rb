@@ -30,10 +30,15 @@ module ActiveRecord
         # require you to assure that you always provide a UUID value before saving
         # a record (as primary keys cannot be +nil+). This might be done via the
         # +SecureRandom.uuid+ method and a +before_save+ callback, for instance.
+
         def primary_key(name, type = :primary_key, options = {})
           return super unless type == :uuid
           options[:default] = options.fetch(:default, 'uuid_generate_v4()')
           options[:primary_key] = true
+          column name, type, options
+        end
+
+        def identity(name, type = :identity, options = {})
           column name, type, options
         end
 
