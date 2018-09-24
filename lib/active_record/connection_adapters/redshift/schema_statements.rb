@@ -316,6 +316,7 @@ module ActiveRecord
           return nil unless result
           Utils.extract_schema_qualified_name(result).to_s
         rescue ActiveRecord::StatementInvalid
+          return nil if !pk.present?
           u = Utils.extract_schema_qualified_name(table_name)
           Redshift::Name.new(u.schema, "#{u.identifier}_#{pk}_seq").to_s
         end
