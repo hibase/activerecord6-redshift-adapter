@@ -11,6 +11,7 @@ require 'active_record/connection_adapters/redshift/schema_dumper'
 require 'active_record/connection_adapters/redshift/schema_statements'
 require 'active_record/connection_adapters/redshift/type_metadata'
 require 'active_record/connection_adapters/redshift/database_statements'
+require "active_record/connection_adapters/determine_if_preparable_visitor"
 
 require 'active_record/tasks/redshift_database_tasks'
 
@@ -156,8 +157,8 @@ module ActiveRecord
       end
 
       class StatementPool < ConnectionAdapters::StatementPool
-        def initialize(connection, max)
-          super(max)
+        def initialize(connection, statement_limit)
+          super(statement_limit)
           @connection = connection
           @counter = 0
           @cache   = Hash.new { |h,pid| h[pid] = {} }
@@ -173,7 +174,7 @@ module ActiveRecord
         end
 
         def []=(sql, key)
-          while @max <= cache.size
+          while @statement_limit <= cache.size
             dealloc(cache.shift.last)
           end
           @counter += 1
@@ -214,6 +215,7 @@ module ActiveRecord
         super(connection, logger, config)
 
         @visitor = Arel::Visitors::PostgreSQL.new self
+        @visitor.extend(DetermineIfPreparableVisitor)
         @prepared_statements = false
 
         @connection_parameters = connection_parameters
@@ -738,7 +740,7 @@ module ActiveRecord
         end
 
         def create_table_definition(*args) # :nodoc:
-          Redshift::TableDefinition.new(*args)
+          Redshift::TableDefinition.new(self, *args)
         end
 
         def add_pg_encoders

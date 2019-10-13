@@ -45,12 +45,15 @@ module ActiveRecord
         end
 
         def select_value(arel, name = nil, binds = [])
-          # In Rails 5.2, arel_from_relation replaced binds_from_relation,
-          # so we see which method exists to get the variables
-          if respond_to?(:arel_from_relation, true)
+          if defined? :single_value_from_rows
+            # Rails 6.0
+            return single_value_from_rows(select_rows(arel, name, binds))
+          elsif respond_to?(:arel_from_relation, true)
+            # Rails 5.2
             arel = arel_from_relation(arel)
             sql, binds = to_sql(arel, binds)
           else
+            # Rails < 5.2
             arel, binds = binds_from_relation arel, binds
             sql = to_sql(arel, binds)
           end
@@ -59,13 +62,16 @@ module ActiveRecord
           end
         end
 
-        def select_values(arel, name = nil)
-          # In Rails 5.2, arel_from_relation replaced binds_from_relation,
-          # so we see which method exists to get the variables
-          if respond_to?(:arel_from_relation, true)
+        def select_values(arel, name = nil, binds = [])
+          if defined? :select_rows
+            # Rails 6.0
+            return select_rows(arel, name, binds).map(&:first)
+          elsif respond_to?(:arel_from_relation, true)
+            # Rails 5.2
             arel = arel_from_relation(arel)
             sql, binds = to_sql(arel, [])
           else
+            # Rails < 5.2
             arel, binds = binds_from_relation arel, []
             sql = to_sql(arel, binds)
           end
@@ -179,20 +185,6 @@ module ActiveRecord
           end
 
           super
-        end
-
-        def insert(arel, name = nil, pk = nil, id_value = nil, sequence_name = nil, binds = [])
-          if @config[:mock]
-            sql, binds = to_sql_and_binds(arel, binds)
-            insert_statement, _, values_statement = sql.partition(/ values /i)
-            values = values_statement.scan(/[\w+]*\((?>[^)(]+|\g<0>)*\)/)
-            return super if values.blank?
-            post_values_statement = values_statement.rpartition(values.last)[2]
-            execute combine_multi_statements(values.map{|row| "#{insert_statement} VALUES #{row} #{post_values_statement}"}), name
-            self
-          else
-            super
-          end
         end
 
         def exec_insert(sql, name = nil, binds = [], pk = nil, sequence_name = nil)
