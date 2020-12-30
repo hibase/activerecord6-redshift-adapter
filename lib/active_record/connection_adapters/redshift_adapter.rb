@@ -11,7 +11,6 @@ require 'active_record/connection_adapters/redshift/schema_dumper'
 require 'active_record/connection_adapters/redshift/schema_statements'
 require 'active_record/connection_adapters/redshift/type_metadata'
 require 'active_record/connection_adapters/redshift/database_statements'
-
 require 'active_record/tasks/redshift_database_tasks'
 
 require 'pg'
@@ -38,6 +37,8 @@ module PG
     end
   end
 end
+
+ActiveRecord::Tasks::DatabaseTasks.register_task(/redshift/, "ActiveRecord::Tasks::PostgreSQLDatabaseTasks")
 
 module ActiveRecord
   module ConnectionHandling # :nodoc:
@@ -100,10 +101,10 @@ module ActiveRecord
         string:      { name: "varchar" },
         text:        { name: "varchar", limit: 65535 },
         integer:     { name: "integer" },
-        float:       { name: "float" },
+        float:       { name: "decimal" },
         decimal:     { name: "decimal" },
         datetime:    { name: "timestamp" },
-        time:        { name: "time" },
+        time:        { name: "timestamp" },
         date:        { name: "date" },
         bigint:      { name: "bigint" },
         smallint:    { name: "smallint" },
@@ -123,12 +124,6 @@ module ActiveRecord
 
       def schema_creation # :nodoc:
         Redshift::SchemaCreation.new self
-      end
-
-      # Returns +true+, since this connection adapter supports prepared statement
-      # caching.
-      def supports_statement_cache?
-        true
       end
 
       def supports_index_sort_order?
@@ -155,55 +150,29 @@ module ActiveRecord
         { concurrently: 'CONCURRENTLY' }
       end
 
-      class StatementPool < ConnectionAdapters::StatementPool
+      class StatementPool < ConnectionAdapters::StatementPool # :nodoc:
         def initialize(connection, max)
           super(max)
           @connection = connection
           @counter = 0
-          @cache   = Hash.new { |h,pid| h[pid] = {} }
         end
-
-        def each(&block); cache.each(&block); end
-        def key?(key);    cache.key?(key); end
-        def [](key);      cache[key]; end
-        def length;       cache.length; end
 
         def next_key
           "a#{@counter + 1}"
         end
 
         def []=(sql, key)
-          while @max <= cache.size
-            dealloc(cache.shift.last)
-          end
-          @counter += 1
-          cache[sql] = key
-        end
-
-        def clear
-          cache.each_value do |stmt_key|
-            dealloc stmt_key
-          end
-          cache.clear
-        end
-
-        def delete(sql_key)
-          dealloc cache[sql_key]
-          cache.delete sql_key
+          super.tap { @counter += 1 }
         end
 
         private
-
-          def cache
-            @cache[Process.pid]
-          end
-
           def dealloc(key)
             @connection.query "DEALLOCATE #{key}" if connection_active?
+          rescue PG::Error
           end
 
           def connection_active?
-            @connection.status == PG::Connection::CONNECTION_OK
+            @connection.status == PG::CONNECTION_OK
           rescue PG::Error
             false
           end
@@ -214,6 +183,7 @@ module ActiveRecord
         super(connection, logger, config)
 
         @visitor = Arel::Visitors::PostgreSQL.new self
+        @visitor.extend(ConnectionAdapters::DetermineIfPreparableVisitor)
         @prepared_statements = false
 
         @connection_parameters = connection_parameters
@@ -387,7 +357,7 @@ module ActiveRecord
         LOCK_NOT_AVAILABLE    = "55P03"
         QUERY_CANCELED        = "57014"
 
-        def translate_exception(exception, message)
+        def translate_exception(exception, message:, sql:, binds:)
           return exception unless exception.respond_to?(:result)
 
           case exception.result.try(:error_field, PG::PG_DIAG_SQLSTATE)
@@ -559,38 +529,66 @@ module ActiveRecord
           ret
         end
 
+
         def exec_no_cache(sql, name, binds)
+          materialize_transactions
+
+          # make sure we carry over any changes to ActiveRecord::Base.default_timezone that have been
+          # made since we established the connection
+          update_typemap_for_default_timezone
+
           type_casted_binds = type_casted_binds(binds)
           log(sql, name, binds, type_casted_binds) do
-            @connection.async_exec(sql, type_casted_binds)
+            ActiveSupport::Dependencies.interlock.permit_concurrent_loads do
+              @connection.exec_params(sql, type_casted_binds)
+            end
           end
         end
 
         def exec_cache(sql, name, binds)
-          stmt_key = prepare_statement(sql)
+          materialize_transactions
+          update_typemap_for_default_timezone
+
+          stmt_key = prepare_statement(sql, binds)
           type_casted_binds = type_casted_binds(binds)
 
           log(sql, name, binds, type_casted_binds, stmt_key) do
-            @connection.exec_prepared(stmt_key, type_casted_binds)
+            ActiveSupport::Dependencies.interlock.permit_concurrent_loads do
+              @connection.exec_prepared(stmt_key, type_casted_binds)
+            end
           end
         rescue ActiveRecord::StatementInvalid => e
-          pgerror = e.original_exception
+          raise unless is_cached_plan_failure?(e)
 
-          # Get the PG code for the failure.  Annoyingly, the code for
-          # prepared statements whose return value may have changed is
-          # FEATURE_NOT_SUPPORTED.  Check here for more details:
-          # http://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/backend/utils/cache/plancache.c#l573
-          begin
-            code = pgerror.result.result_error_field(PG::Result::PG_DIAG_SQLSTATE)
-          rescue
-            raise e
-          end
-          if FEATURE_NOT_SUPPORTED == code
-            @statements.delete sql_key(sql)
-            retry
+          # Nothing we can do if we are in a transaction because all commands
+          # will raise InFailedSQLTransaction
+          if in_transaction?
+            raise ActiveRecord::PreparedStatementCacheExpired.new(e.cause.message)
           else
-            raise e
+            @lock.synchronize do
+              # outside of transactions we can simply flush this query and retry
+              @statements.delete sql_key(sql)
+            end
+            retry
           end
+        end
+
+        # Annoyingly, the code for prepared statements whose return value may
+        # have changed is FEATURE_NOT_SUPPORTED.
+        #
+        # This covers various different error types so we need to do additional
+        # work to classify the exception definitively as a
+        # ActiveRecord::PreparedStatementCacheExpired
+        #
+        # Check here for more details:
+        # https://git.postgresql.org/gitweb/?p=postgresql.git;a=blob;f=src/backend/utils/cache/plancache.c#l573
+        CACHED_PLAN_HEURISTIC = "cached plan must not change result type"
+        def is_cached_plan_failure?(e)
+          pgerror = e.cause
+          code = pgerror.result.result_error_field(PG::PG_DIAG_SQLSTATE)
+          code == FEATURE_NOT_SUPPORTED && pgerror.message.include?(CACHED_PLAN_HEURISTIC)
+        rescue
+          false
         end
 
         # Returns the statement identifier for the client side cache
@@ -601,27 +599,31 @@ module ActiveRecord
 
         # Prepare the statement if it hasn't been prepared, return
         # the statement key.
-        def prepare_statement(sql)
-          sql_key = sql_key(sql)
-          unless @statements.key? sql_key
-            nextkey = @statements.next_key
-            begin
-              @connection.prepare nextkey, sql
-            rescue => e
-              raise translate_exception_class(e, sql)
+        def prepare_statement(sql, binds)
+          @lock.synchronize do
+            sql_key = sql_key(sql)
+            unless @statements.key? sql_key
+              nextkey = @statements.next_key
+              begin
+                @connection.prepare nextkey, sql
+              rescue => e
+                raise translate_exception_class(e, sql, binds)
+              end
+              # Clear the queue
+              @connection.get_last_result
+              @statements[sql_key] = nextkey
             end
-            # Clear the queue
-            @connection.get_last_result
-            @statements[sql_key] = nextkey
+            @statements[sql_key]
           end
-          @statements[sql_key]
         end
 
         # Connects to a PostgreSQL server and sets up the adapter depending on the
         # connected server's characteristics.
         def connect
-          @connection = PG.connect(@connection_parameters.merge(remove_application_name: true))
+          @connection = PG.connect(@connection_parameters)
           configure_connection
+          add_pg_encoders
+          add_pg_decoders
         rescue ::PG::Error => error
           if error.message.include?("does not exist")
             raise ActiveRecord::NoDatabaseError.new(error.message)
@@ -641,8 +643,17 @@ module ActiveRecord
 
           # Use standard-conforming strings so we don't have to do the E'...' dance.
           # set_standard_conforming_strings
-
           variables = @config.fetch(:variables, {}).stringify_keys
+
+          # If using Active Record's time zone support configure the connection to return
+          # TIMESTAMP WITH ZONE types in UTC.
+          unless variables["timezone"]
+            if ActiveRecord::Base.default_timezone == :utc
+              variables["timezone"] = "UTC"
+            elsif @local_tz
+              variables["timezone"] = @local_tz
+            end
+          end
 
           # SET statements from :variables config hash
           # http://www.postgresql.org/docs/8.3/static/sql-set.html
@@ -732,13 +743,111 @@ module ActiveRecord
           # end_sql
         end
 
-        def extract_table_ref_from_insert_sql(sql) # :nodoc:
+        def extract_table_ref_from_insert_sql(sql)
           sql[/into\s("[A-Za-z0-9_."\[\]\s]+"|[A-Za-z0-9_."\[\]]+)\s*/im]
           $1.strip if $1
         end
 
+        def arel_visitor
+          Arel::Visitors::PostgreSQL.new(self)
+        end
+
+        def build_statement_pool
+          StatementPool.new(@connection, self.class.type_cast_config_to_integer(@config[:statement_limit]))
+        end
+
+
+        def can_perform_case_insensitive_comparison_for?(column)
+          @case_insensitive_cache ||= {}
+          @case_insensitive_cache[column.sql_type] ||= begin
+            sql = <<~SQL
+              SELECT exists(
+                SELECT * FROM pg_proc
+                WHERE proname = 'lower'
+                  AND proargtypes = ARRAY[#{quote column.sql_type}::regtype]::oidvector
+              ) OR exists(
+                SELECT * FROM pg_proc
+                INNER JOIN pg_cast
+                  ON ARRAY[casttarget]::oidvector = proargtypes
+                WHERE proname = 'lower'
+                  AND castsource = #{quote column.sql_type}::regtype
+              )
+            SQL
+            execute_and_clear(sql, "SCHEMA", []) do |result|
+              result.getvalue(0, 0)
+            end
+          end
+        end
+
+        def add_pg_encoders
+          map = PG::TypeMapByClass.new
+          map[Integer] = PG::TextEncoder::Integer.new
+          map[TrueClass] = PG::TextEncoder::Boolean.new
+          map[FalseClass] = PG::TextEncoder::Boolean.new
+          @connection.type_map_for_queries = map
+        end
+
+        def update_typemap_for_default_timezone
+          if @default_timezone != ActiveRecord::Base.default_timezone && @timestamp_decoder
+            decoder_class = ActiveRecord::Base.default_timezone == :utc ?
+              PG::TextDecoder::TimestampUtc :
+              PG::TextDecoder::TimestampWithoutTimeZone
+
+            @timestamp_decoder = decoder_class.new(@timestamp_decoder.to_h)
+            @connection.type_map_for_results.add_coder(@timestamp_decoder)
+            @default_timezone = ActiveRecord::Base.default_timezone
+          end
+        end
+
+
+        def add_pg_decoders
+          @default_timezone = nil
+          @timestamp_decoder = nil
+
+          coders_by_name = {
+            "int2" => PG::TextDecoder::Integer,
+            "int4" => PG::TextDecoder::Integer,
+            "int8" => PG::TextDecoder::Integer,
+            "oid" => PG::TextDecoder::Integer,
+            "float4" => PG::TextDecoder::Float,
+            "float8" => PG::TextDecoder::Float,
+            "bool" => PG::TextDecoder::Boolean,
+          }
+
+          if defined?(PG::TextDecoder::TimestampUtc)
+            # Use native PG encoders available since pg-1.1
+            coders_by_name["timestamp"] = PG::TextDecoder::TimestampUtc
+            coders_by_name["timestamptz"] = PG::TextDecoder::TimestampWithTimeZone
+          end
+
+          known_coder_types = coders_by_name.keys.map { |n| quote(n) }
+          query = <<~SQL % known_coder_types.join(", ")
+            SELECT t.oid, t.typname
+            FROM pg_type as t
+            WHERE t.typname IN (%s)
+          SQL
+          coders = execute_and_clear(query, "SCHEMA", []) do |result|
+            result
+              .map { |row| construct_coder(row, coders_by_name[row["typname"]]) }
+              .compact
+          end
+
+          map = PG::TypeMapByOid.new
+          coders.each { |coder| map.add_coder(coder) }
+          @connection.type_map_for_results = map
+
+          # extract timestamp decoder for use in update_typemap_for_default_timezone
+          @timestamp_decoder = coders.find { |coder| coder.name == "timestamp" }
+          update_typemap_for_default_timezone
+        end
+
+        def construct_coder(row, coder_class)
+          return unless coder_class
+          coder_class.new(oid: row["oid"].to_i, name: row["typname"])
+        end
+
         def create_table_definition(*args) # :nodoc:
-          Redshift::TableDefinition.new(*args)
+          Redshift::TableDefinition.new(self, *args)
         end
 
         def add_pg_encoders
