@@ -811,6 +811,7 @@ module ActiveRecord
             "oid" => PG::TextDecoder::Integer,
             "float4" => PG::TextDecoder::Float,
             "float8" => PG::TextDecoder::Float,
+            "json" => PG::TextDecoder::JSON,
             "bool" => PG::TextDecoder::Boolean,
           }
 
