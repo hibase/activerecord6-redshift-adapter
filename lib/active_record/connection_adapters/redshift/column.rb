@@ -2,6 +2,11 @@ module ActiveRecord
   module ConnectionAdapters
     class RedshiftColumn < Column #:nodoc:
       delegate :oid, :fmod, to: :sql_type_metadata
+      
+      # Required for Rails 6.1, see https://github.com/rails/rails/pull/41756
+      mattr_reader :array, default: false
+      alias :array? :array
+
       attr_reader :primary_key, :primary_key_index, :redshift_distribution_key, :redshift_sort_key_order, :redshift_column_encoding
 
       def initialize(name, default, sql_type_metadata, null = true, default_function = nil, is_primary_key = false, column_index = nil, primary_key_order = nil, is_dist_key = false, sort_key_order = 0, col_encoding = nil)
